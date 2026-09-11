@@ -1,0 +1,172 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Read development identity
+        id: development-identity
+        run: ./scripts/private/development-identity.sh "$(pwd -P)" >>"${GITHUB_OUTPUT}"
+
+      - name: Build development binary
+        run: >-
+          ./scripts/build.sh --arch amd64
+          --output "${RUNNER_TEMP}/transferlanes-linux-amd64"
+          --development-commit '${{ steps.development-identity.outputs.commit }}'
+          --development-modified '${{ steps.development-identity.outputs.modified }}'
+
+      - name: Verify development version
+        run: |
+          expected='transferlanes devel commit=${{ steps.development-identity.outputs.commit }} modified=${{ steps.development-identity.outputs.modified }}'
+          actual="$("${RUNNER_TEMP}/transferlanes-linux-amd64" --version)"
+          test "${actual}" = "${expected}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Build test image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: false
+        with:
+          context: .
+          file: test/default/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: transferlanes-default:acceptance
+          build-args: |
+            TRANSFERLANES_DEVELOPMENT_COMMIT=${{ steps.development-identity.outputs.commit }}
+            TRANSFERLANES_DEVELOPMENT_MODIFIED=${{ steps.development-identity.outputs.modified }}
+          cache-from: type=gha,scope=transferlanes-default-linux-amd64
+          cache-to: type=gha,mode=max,scope=transferlanes-default-linux-amd64
+
+      - name: Test
+        run: >-
+          ./scripts/test.sh
+          --development-commit '${{ steps.development-identity.outputs.commit }}'
+          --development-modified '${{ steps.development-identity.outputs.modified }}'
+          --image transferlanes-default:acceptance
+
+  release:
+    name: Publish release
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: test
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      TAG_NAME: ${{ github.ref_name }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Prepare release workspace
+        run: printf 'RELEASE_ROOT=%s/transferlanes-release\n' "${RUNNER_TEMP}" >>"${GITHUB_ENV}"
+
+      - name: Validate release tag
+        shell: bash
+        run: |
+          if [[ ! "${TAG_NAME}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            printf 'release tag must use vMAJOR.MINOR.PATCH without leading zeroes: %s\n' "${TAG_NAME}" >&2
+            exit 1
+          fi
+
+      - name: Build release binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RELEASE_ROOT}/stage" "${RELEASE_ROOT}/dist"
+          for architecture in amd64 arm64; do
+            package="transferlanes-${TAG_NAME}-linux-${architecture}"
+            package_root="${RELEASE_ROOT}/stage/${package}"
+            mkdir "${package_root}"
+            ./scripts/build.sh \
+              --arch "${architecture}" \
+              --output "${package_root}/transferlanes" \
+              --release-version "${TAG_NAME}"
+            cp README.md LICENSE "${package_root}/"
+            install -m 0755 "${package_root}/transferlanes" "${RELEASE_ROOT}/dist/${package}"
+          done
+
+      - name: Package release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_date_epoch="$(git show -s --format=%ct HEAD)"
+          for architecture in amd64 arm64; do
+            package="transferlanes-${TAG_NAME}-linux-${architecture}"
+            tar \
+              --sort=name \
+              --mtime="@${source_date_epoch}" \
+              --owner=0 \
+              --group=0 \
+              --numeric-owner \
+              -C "${RELEASE_ROOT}/stage" \
+              -czf "${RELEASE_ROOT}/dist/${package}.tar.gz" \
+              "${package}"
+          done
+          (
+            cd "${RELEASE_ROOT}/dist"
+            sha256sum ./transferlanes-${TAG_NAME}-linux-* >"transferlanes-${TAG_NAME}-checksums.txt"
+          )
+
+      - name: Verify release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$("${RELEASE_ROOT}/dist/transferlanes-${TAG_NAME}-linux-amd64" --version)" = "transferlanes ${TAG_NAME}"
+          for architecture in amd64 arm64; do
+            binary="${RELEASE_ROOT}/dist/transferlanes-${TAG_NAME}-linux-${architecture}"
+            go version -m "${binary}" | grep -F $'\tbuild\tGOOS=linux'
+            go version -m "${binary}" | grep -F $'\tbuild\tGOARCH='"${architecture}"
+          done
+          (
+            cd "${RELEASE_ROOT}/dist"
+            sha256sum --check "transferlanes-${TAG_NAME}-checksums.txt"
+          )
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: transferlanes-${{ github.ref_name }}
+          path: ${{ runner.temp }}/transferlanes-release/dist/*
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "${TAG_NAME}"
+          "${RELEASE_ROOT}"/dist/*
+          --verify-tag
+          --generate-notes
