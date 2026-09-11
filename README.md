@@ -34,6 +34,11 @@ IPv4 forwarding must already be permitted on each selected provider interface.
 Privileged network controllers must leave Transfer Lanes' temporary veth interfaces
 unchanged while a run is active.
 
+## Releases
+
+Prebuilt Linux binaries for `amd64` and `arm64` are available from
+[GitHub Releases](https://github.com/ZhuzhuNo3/transferlanes/releases/latest).
+
 ## Build
 
 Building Transfer Lanes requires Go 1.25 or newer. From the repository root, build a
