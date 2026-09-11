@@ -35,7 +35,7 @@ func (page HelpPage) String() string {
 	}
 }
 
-const rootHelpText = `transferlanes parallelizes the transfer of a directory across multiple outbound
+const rootHelpText = `transferlanes runs a directory transfer over one or more preconfigured outbound
 network paths.
 
 Usage:

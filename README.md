@@ -1,15 +1,14 @@
 # Transfer Lanes
 
-`transferlanes` runs a directory transfer over one or more preconfigured Internet
-egress paths on a multi-WAN or multi-homed Linux host. When several paths are
-selected, it uses them in parallel. Each path is selected by a local IPv4
-address.
+Transfer Lanes is a multi-homed file transfer tool for Linux. It distributes
+whole files from a source directory across one or more preconfigured Internet
+egress paths, each selected by a local source IPv4 address. When several paths
+are selected, it runs them in parallel.
 
-Transfer Lanes assigns whole files from the source directory to the selected paths
-according to relative weights and exposes each assignment as a read-only view
-of the source tree. It then runs rsync, an S3 client, or another transfer
-command for each view, replacing one standalone `{}` argument with the view
-path.
+Files are assigned to the selected paths according to relative weights, and
+each assignment is exposed as a read-only view of the source tree. Transfer
+Lanes then runs rsync, an S3 client, or another transfer command for each view,
+replacing one standalone `{}` argument with the view path.
 
 Transfer Lanes does not configure provider routes, combine multiple paths into one
 connection, split individual files, or provide dynamic failover. `transferlanes run`

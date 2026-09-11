@@ -38,7 +38,7 @@ func TestHelpPagesMatchPublicContract(t *testing.T) {
 	}
 }
 
-const rootHelpContract = `transferlanes parallelizes the transfer of a directory across multiple outbound
+const rootHelpContract = `transferlanes runs a directory transfer over one or more preconfigured outbound
 network paths.
 
 Usage:
